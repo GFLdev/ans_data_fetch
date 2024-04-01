@@ -42,13 +42,19 @@ def fetch_data(url: str, path: str) -> None:
             fetch_data(new_url, curr_dir)
         else:
             if link["href"].endswith(".dbc"):
-                out = os.path.abspath(os.path.join(path, link["href"]))
-                res = requests.get(f"{url}/{link['href']}", timeout=10)
+                if not os.path.exists(
+                    os.path.join(
+                        path,
+                        f"{link['href'][:-3]}dbc"
+                    )
+                ):
+                    out = os.path.abspath(os.path.join(path, link["href"]))
+                    res = requests.get(f"{url}/{link['href']}", timeout=10)
 
-                open(out, "wb").write(res.content)
-                dbc2dbf(out, f"{out[:-3]}dbf")
-                os.remove(out)
-                print(f"{out[:-3]}dbf: {res.status_code}")
+                    open(out, "wb").write(res.content)
+                    dbc2dbf(out, f"{out[:-3]}dbf")
+                    os.remove(out)
+                    print(f"{out[:-3]}dbf: {res.status_code}")
 
 root_dir = os.getcwd()
 os.makedirs(os.path.abspath(os.path.join(root_dir, "Dados")), exist_ok=True)
