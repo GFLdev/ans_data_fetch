@@ -9,7 +9,7 @@ import sys
 from bs4 import BeautifulSoup
 import requests
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QMessageBox
-from PyQt5.QtWidgets import QVBoxLayout, QPushButton, QFileDialog
+from PyQt5.QtWidgets import QVBoxLayout, QPushButton, QFileDialog, QLabel
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
 URL_BASE = "https://dadosabertos.ans.gov.br/FTP/Base_de_dados/Microdados/dados_dbc/"
@@ -112,6 +112,10 @@ class App(QMainWindow):
         self.btn_dir.clicked.connect(self.set_dir)
         layout.addWidget(self.btn_dir)
 
+        self.lbl_dir = QLabel("Nenhum diretório selecionado", self)
+        self.lbl_dir.setContentsMargins(0, 5, 0, 15)
+        layout.addWidget(self.lbl_dir)
+
         self.btn_process = QPushButton("Processar", self)
         self.btn_process.clicked.connect(self.process)
         self.btn_process.setEnabled(False)
@@ -150,6 +154,7 @@ class App(QMainWindow):
         )
 
         self.root_dir = ""
+        self.lbl_dir.setText("Nenhum diretório selecionado")
         self.btn_process.setText("Processar")
         self.btn_dir.setEnabled(True)
 
@@ -165,6 +170,7 @@ class App(QMainWindow):
 
         if directory:
             self.root_dir = directory
+            self.lbl_dir.setText(self.root_dir)
             self.btn_process.setEnabled(True)
 
 if __name__ == "__main__":

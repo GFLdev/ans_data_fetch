@@ -13,7 +13,10 @@ packages = [
 
 options = {
     "build_exe": {
-        "packages": packages
+        "packages": packages,
+        "include_files": [
+            ("Tab415", "Tab415")
+        ]
     }
 }
 
