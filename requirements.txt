@@ -1,0 +1,7 @@
+requests~=2.31.0
+bs4~=0.0.2
+beautifulsoup4~=4.12.3
+PyQt5~=5.15.10
+cx_Freeze~=7.0.0
+pandas~=2.2.2
+simpledbf~=0.2.6

@@ -1,90 +1,35 @@
 """
-Script para obtencao dos dados da ANS em .dbc
+Script para obtenção dos dados da ANS em .dbc
 e conversao para .dbf
 """
 
 import os
+import requests
 import subprocess
 import sys
+import pandas as pd
+from simpledbf import Dbf5
+from threading import Thread
 from bs4 import BeautifulSoup
-import requests
 from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QMessageBox
-from PyQt5.QtWidgets import QVBoxLayout, QPushButton, QFileDialog, QLabel
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtWidgets import QGridLayout, QPushButton, QFileDialog, QLabel, QRadioButton
+from PyQt5.QtCore import Qt
 
-URL_BASE = "https://dadosabertos.ans.gov.br/FTP/Base_de_dados/Microdados/dados_dbc/"
+URL_BASE = 'https://dadosabertos.ans.gov.br/FTP/Base_de_dados/Microdados/dados_dbc/'
 
-class WorkerThread(QThread):
+
+def is_directory(url: str) -> bool:
     """
-    Definição da classe
+    Verificar se URL é um diretório
+
+    :param url: URL para verificação
+    :return: Bool
     """
-    finished = pyqtSignal()
+    if url.endswith('/'):
+        return True
+    else:
+        return False
 
-    def __init__(self, root_dir) -> None:
-        super().__init__()
-
-        self.root_dir = root_dir
-
-    def is_directory(self, url: str) -> bool:
-        """
-        Verificar se URL e um diretorio
-
-        Arg: url (URL para verificacao)
-        Ret: bool
-        """
-        if url.endswith("/"):
-            return True
-        else:
-            return False
-
-    def fetch_data(self, url: str, path: str) -> None:
-        """
-        Obtencao e conversao dos dados
-
-        Args: url (URL para download), path (caminho relativo para salvamento)
-        Ret: None
-        """
-        page = requests.get(url, timeout=10).content
-        bs_obj = BeautifulSoup(page, "html.parser")
-        possible_dirs = bs_obj.findAll("a", href=True)
-
-        for link in possible_dirs:
-            if link["href"].startswith("/FTP/"):
-                continue
-            elif self.is_directory(link["href"]):
-                curr_dir = os.path.abspath(os.path.join(path, link["href"]))
-                new_url = url + link["href"]
-                os.makedirs(curr_dir, exist_ok=True)
-
-                self.fetch_data(new_url, curr_dir)
-            else:
-                if link["href"].endswith(".dbc"):
-                    if not os.path.exists(
-                        os.path.join(
-                            path,
-                            f"{link['href'][:-3]}dbf"
-                        )
-                    ):
-                        out = os.path.abspath(os.path.join(path, link["href"]))
-                        res = requests.get(f"{url}/{link['href']}", timeout=10)
-
-                        open(out, "wb").write(res.content)
-                        subprocess.run(
-                            ["./Tab415/dbf2dbc.exe", out, path],
-                            check = True
-                        )
-                        os.remove(out)
-                        print(f"{out[:-3]}dbf: {res.status_code}")
-
-    def run(self) -> None:
-        """
-        Execução do script
-        """
-        os.makedirs(os.path.abspath(os.path.join(self.root_dir, "Dados")), exist_ok=True)
-        self.root_dir = os.path.abspath(os.path.join(self.root_dir, "Dados"))
-
-        self.fetch_data(URL_BASE, self.root_dir)
-        self.finished.emit()
 
 class App(QMainWindow):
     """
@@ -93,89 +38,277 @@ class App(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.root_dir = ""
+        self.process_type = True
+
+        self.root_dir = ''
         self.worker_thread = None
+        self.process_lock = [0, 0]
 
-        self.init_ui()
+        self.layout = QGridLayout()
+        self.lbl_select = QLabel('Selecione o tipo de modificador: ', self)
+        self.lbl_fetch = QLabel('Obter DBF', self)
+        self.lbl_union = QLabel('Unir DBF\'s', self)
+        self.btn_dir = QPushButton('Selecionar pasta', self)
+        self.lbl_dir = QLabel('Nenhum diretório selecionado', self)
+        self.btn_process = QPushButton('Processar', self)
+        self.central_widget = QWidget()
 
-    def init_ui(self) -> None:
+        self.__init_ui__()
+
+    def __init_ui__(self) -> None:
         """
         Inicializador do GUI
+        
+        :return: None
         """
-        self.setWindowTitle("Dados ANS")
+        self.setWindowTitle('Dados ANS')
 
-        layout = QVBoxLayout()
-        layout.setAlignment(Qt.AlignCenter)
-        layout.setContentsMargins(20, 20, 20, 20)
+        self.layout.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        self.layout.setContentsMargins(20, 20, 20, 20)
+        self.setFixedSize(300, 300)
 
-        self.btn_dir = QPushButton("Selecionar pasta", self)
-        self.btn_dir.clicked.connect(self.set_dir)
-        layout.addWidget(self.btn_dir)
+        self.lbl_select.setAlignment(Qt.AlignTop | Qt.AlignCenter)
+        self.lbl_select.setContentsMargins(0, 5, 0, 15)
+        self.layout.addWidget(self.lbl_select, 0, 0, 1, 2)
+    
+        self.lbl_fetch.setAlignment(Qt.AlignTop | Qt.AlignCenter)
+        self.lbl_fetch.setContentsMargins(0, 5, 0, 15)
+        self.layout.addWidget(self.lbl_fetch, 1, 0, 1, 1)
+    
+        radiobutton = QRadioButton(self)
+        radiobutton.type = 'fetch'
+        radiobutton.toggled.connect(self.__select_type__)
+        self.layout.addWidget(radiobutton, 1, 1, 1, 1)
+    
+        self.lbl_union.setAlignment(Qt.AlignTop | Qt.AlignCenter)
+        self.lbl_union.setContentsMargins(0, 5, 0, 15)
+        self.layout.addWidget(self.lbl_union, 2, 0, 1, 1)
+    
+        radiobutton = QRadioButton(self)
+        radiobutton.type = 'union'
+        radiobutton.toggled.connect(self.__select_type__)
+        self.layout.addWidget(radiobutton, 2, 1, 1, 1)
 
-        self.lbl_dir = QLabel("Nenhum diretório selecionado", self)
+        self.btn_dir.clicked.connect(self.__set_fetch_dir__)
+        self.layout.addWidget(self.btn_dir, 3, 0, 1, 2)
+
         self.lbl_dir.setContentsMargins(0, 5, 0, 15)
-        layout.addWidget(self.lbl_dir)
+        self.layout.addWidget(self.lbl_dir, 4, 0, 1, 2)
 
-        self.btn_process = QPushButton("Processar", self)
-        self.btn_process.clicked.connect(self.process)
+        self.btn_process.clicked.connect(self.__process__)
         self.btn_process.setEnabled(False)
-        layout.addWidget(self.btn_process)
+        self.layout.addWidget(self.btn_process, 5, 0, 1, 2)
 
-        self.central_widget = QWidget()
-        self.central_widget.setLayout(layout)
+        self.central_widget.setLayout(self.layout)
         self.setCentralWidget(self.central_widget)
 
         self.adjustSize()
         self.setFixedHeight(self.height())
         self.setFixedWidth(300)
 
+    def __select_type__(self) -> None:
+        """
+        Método para escolha do tipo de processamento
 
-    def process(self):
+        :return: None
+        """
+        radiobutton = self.sender()
+        if radiobutton.isChecked():
+            if radiobutton.type == 'fetch':
+                self.process_type = True
+            else:
+                self.process_type = False
+
+            self.process_lock[0] = 1
+
+    def __check_lock__(self) -> None:
+        """
+        Verificação e ativação do botão de processamento e cálculo
+
+        :return: None
+        """
+        if all(self.process_lock):
+            self.btn_process.setEnabled(True)
+        else:
+            self.btn_process.setEnabled(False)
+
+    def __fetch_data__(self, url: str, path: str) -> None:
+        """
+        Obtenção e conversão dos dados
+
+        :param url: URL para download
+        :param path: Caminho relativo para salvamento
+        :return: None
+        """
+        page = requests.get(url, timeout=10).content
+        bs_obj = BeautifulSoup(page, 'html.parser')
+        possible_dirs = bs_obj.findAll('a', href=True)
+
+        for link in possible_dirs:
+            if link['href'].startswith('/FTP/'):
+                continue
+            elif is_directory(link['href']):
+                curr_dir = os.path.abspath(os.path.join(path, link['href']))
+                new_url = url + link['href']
+                os.makedirs(curr_dir, exist_ok=True)
+
+                self.__fetch_data__(new_url, curr_dir)
+            else:
+                if link['href'].endswith('.dbc'):
+                    if not os.path.exists(
+                            os.path.join(
+                                path,
+                                f'{link['href'][:-3]}dbf'
+                            )
+                    ):
+                        out = os.path.abspath(os.path.join(path, link['href']))
+                        res = requests.get(f'{url}/{link['href']}', timeout=10)
+
+                        open(out, 'wb').write(res.content)
+                        subprocess.run(
+                            ['./Tab415/dbf2dbc.exe', out, path],
+                            check=True
+                        )
+                        os.remove(out)
+                        print(f'{out[:-3]}dbf: {res.status_code}')
+
+    def __callstack__(self) -> None:
         """
         Fila de processos
+        
+        :return: None
         """
-        if self.worker_thread is None or not self.worker_thread.isRunning():
-            self.worker_thread = WorkerThread(self.root_dir)
-            self.worker_thread.finished.connect(self.worker_thread.deleteLater)
-            self.worker_thread.finished.connect(self.handle_finished)
-            self.btn_process.setText("Processando")
-            self.btn_dir.setEnabled(False)
-            self.btn_process.setEnabled(False)
-            self.worker_thread.start()
+        if self.process_type:
+            self.root_dir = os.path.abspath(os.path.join(self.root_dir, 'Dados'))
+            os.makedirs(self.root_dir, exist_ok=True)
+            self.__fetch_data__(URL_BASE, self.root_dir)
 
-    def handle_finished(self):
+            QMessageBox.information(
+                None,
+                'Sucesso',
+                f'Dados extraídos com sucesso em:\n{self.root_dir}/Dados'
+            )
+        else:
+            self.__union_dbf__()
+
+        self.root_dir = ''
+        self.lbl_dir.setText('Nenhum diretório selecionado')
+        self.btn_process.setText('Processar')
+        for i in range(self.layout.count()):
+            widget = self.layout.itemAt(i).widget()
+            if widget:
+                widget.setEnabled(True)
+        self.process_lock = [0, 0]
+        self.__check_lock__()
+
+    def __process__(self) -> None:
         """
-        Redefinição da interface e variáveis, e caixa de diálogo
+        Execução do callstack
+        
+        :return: None
         """
-        QMessageBox.information(
-            None,
-            "Sucesso",
-            f"Dados extraídos com sucesso em:\n{self.root_dir}/Dados"
-        )
+        t1 = Thread(target=self.__callstack__)
+        for i in range(self.layout.count()):
+            widget = self.layout.itemAt(i).widget()
+            if widget:
+                widget.setEnabled(False)
+        self.btn_process.setText('Processando')
+        t1.start()
 
-        self.root_dir = ""
-        self.lbl_dir.setText("Nenhum diretório selecionado")
-        self.btn_process.setText("Processar")
-        self.btn_dir.setEnabled(True)
-
-    def set_dir(self) -> None:
+    def __set_fetch_dir__(self) -> None:
         """
         Seleção da pasta para salvamento dos arquivos
+
+        :return: None
         """
         directory = QFileDialog.getExistingDirectory(
             self,
-            "Pasta para salvamento dos arquivos",
-            "/"
+            'Pasta para salvamento dos arquivos',
+            '/'
         )
 
         if directory:
             self.root_dir = directory
             self.lbl_dir.setText(self.root_dir)
-            self.btn_process.setEnabled(True)
+            self.process_lock[1] = 1
+            self.__check_lock__()
 
-if __name__ == "__main__":
+    def __set_union_dir__(self) -> None:
+        """
+        Seleção da pasta para união dos arquivos DBF
+
+        :return: None
+        """
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            'Pasta com os arquivos DBF',
+            '/'
+        )
+
+        if directory:
+            self.root_dir = directory
+            self.lbl_dir.setText(self.root_dir)
+            self.process_lock[1] = 1
+            self.__check_lock__()
+
+    def __union_dbf__(self) -> None:
+        """
+        Une arquivos DBF em um único arquivo JSON
+
+        :return: None
+        """
+        # Inicializa uma lista para armazenar os DataFrames
+        res_df = pd.DataFrame()
+
+        # Percorre todos os arquivos DBF na pasta
+        for root, _, files in os.walk(self.root_dir):
+            for file in files:
+                if file.endswith('.dbf'):
+                    filepath = os.path.join(root, file)
+                    try:
+                        dbf = Dbf5(filepath)
+                        df = dbf.to_dataframe()
+                        res_df = pd.concat([res_df, df])
+                    except Exception as e:
+                        QMessageBox.Warning(
+                            None,
+                            'Erro',
+                            f'[ERR] Erro ao ler o arquivo em "{filepath}":\n{e}/'
+                        )
+
+        # Verifica se a lista de DataFrames está vazia
+        if res_df.empty:
+            QMessageBox.information(
+                None,
+                'Processamento concluído',
+                'Nenhum arquivo .dbf foi encontrado ou lido com sucesso.'
+            )
+        else:
+            # Salva o DataFrame combinado em um arquivo JSON
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                'Salvar Arquivo',
+                'Uniao.json',
+                'JavaScript Object Notation (*.json);;Todos os Arquivos (*)'
+            )
+
+            if file_path:
+                res_df.to_json(
+                    f'{file_path}',
+                    orient='records',
+                    lines=True
+                )
+
+                QMessageBox.information(
+                    None,
+                    'Sucesso',
+                    f'Arquivos DBF unidos com sucesso e salvo em:\n{file_path}'
+                )
+
+
+if __name__ == '__main__':
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
+    app.setStyle('Fusion')
     app.setStyleSheet("""
         * {
             font-size: 14px;
