@@ -1,13 +1,15 @@
 """
-Script para obtenção dos dados da ANS em .dbc
-e conversao para .dbf
+Script para obtenção dos dados da ANS em DBC
+e conversao para DBF
 """
-
 import os
+import threading
+
 import requests
 import subprocess
 import sys
 import pandas as pd
+from multiprocessing.pool import ThreadPool as Pool
 from simpledbf import Dbf5
 from threading import Thread
 from bs4 import BeautifulSoup
@@ -41,8 +43,10 @@ class App(QMainWindow):
         self.process_type = True
 
         self.root_dir = ''
+        self.union_files = []
         self.worker_thread = None
         self.process_lock = [0, 0]
+        self.res_df = pd.DataFrame()
 
         self.layout = QGridLayout()
         self.lbl_select = QLabel('Selecione o tipo de modificador: ', self)
@@ -77,6 +81,7 @@ class App(QMainWindow):
     
         radiobutton = QRadioButton(self)
         radiobutton.type = 'fetch'
+        radiobutton.toggle()
         radiobutton.toggled.connect(self.__select_type__)
         self.layout.addWidget(radiobutton, 1, 1, 1, 1)
     
@@ -114,9 +119,13 @@ class App(QMainWindow):
         """
         radiobutton = self.sender()
         if radiobutton.isChecked():
+            self.btn_dir.clicked.disconnect()
+            
             if radiobutton.type == 'fetch':
+                self.btn_dir.clicked.connect(self.__set_fetch_dir__)
                 self.process_type = True
             else:
+                self.btn_dir.clicked.connect(self.__set_union_files__)
                 self.process_type = False
 
             self.process_lock[0] = 1
@@ -182,12 +191,6 @@ class App(QMainWindow):
             self.root_dir = os.path.abspath(os.path.join(self.root_dir, 'Dados'))
             os.makedirs(self.root_dir, exist_ok=True)
             self.__fetch_data__(URL_BASE, self.root_dir)
-
-            QMessageBox.information(
-                None,
-                'Sucesso',
-                f'Dados extraídos com sucesso em:\n{self.root_dir}/Dados'
-            )
         else:
             self.__union_dbf__()
 
@@ -233,23 +236,42 @@ class App(QMainWindow):
             self.process_lock[1] = 1
             self.__check_lock__()
 
-    def __set_union_dir__(self) -> None:
+    def __set_union_files__(self) -> None:
         """
-        Seleção da pasta para união dos arquivos DBF
+        Seleção dos arquivos DBF para união
 
         :return: None
         """
-        directory = QFileDialog.getExistingDirectory(
+        files = QFileDialog().getOpenFileNames(
             self,
-            'Pasta com os arquivos DBF',
-            '/'
+            'Arquivos DBF',
+            '~/',
+            'DBF (*.dbf)'
         )
 
-        if directory:
-            self.root_dir = directory
+        if files:
+            self.union_files = files
             self.lbl_dir.setText(self.root_dir)
             self.process_lock[1] = 1
             self.__check_lock__()
+
+    def __union_op__(self, file) -> None:
+        """
+        Processo de união de arquivos DBF para multiprocessamento
+
+        :param file: Arquivo DBF para união
+        :return: None
+        """
+        try:
+            dbf = Dbf5(file)
+            df = dbf.to_dataframe()
+            self.res_df = pd.concat([self.res_df, df])
+        except Exception as e:
+            QMessageBox.Warning(
+                None,
+                'Erro',
+                f'[ERR] Erro ao ler o arquivo em "{file}":\n{e}/'
+            )
 
     def __union_dbf__(self) -> None:
         """
@@ -258,32 +280,36 @@ class App(QMainWindow):
         :return: None
         """
         # Inicializa uma lista para armazenar os DataFrames
-        res_df = pd.DataFrame()
+        self.res_df = pd.DataFrame()
 
         # Percorre todos os arquivos DBF na pasta
-        for root, _, files in os.walk(self.root_dir):
-            for file in files:
-                if file.endswith('.dbf'):
-                    filepath = os.path.join(root, file)
-                    try:
-                        dbf = Dbf5(filepath)
-                        df = dbf.to_dataframe()
-                        res_df = pd.concat([res_df, df])
-                    except Exception as e:
-                        QMessageBox.Warning(
-                            None,
-                            'Erro',
-                            f'[ERR] Erro ao ler o arquivo em "{filepath}":\n{e}/'
-                        )
+        pool = Pool(threading.active_count())
+
+        results = [pool.apply_async(self.__union_op__, (filepath,)) for filepath in self.union_files[0]]
+
+        self.union_files = []
+
+        pool.close()
+        pool.join()
+
+        # Verifica os resultados
+        for result in results:
+            result.get()
 
         # Verifica se a lista de DataFrames está vazia
-        if res_df.empty:
+        if self.res_df.empty:
             QMessageBox.information(
                 None,
                 'Processamento concluído',
                 'Nenhum arquivo .dbf foi encontrado ou lido com sucesso.'
             )
         else:
+            self.res_df.sort_values(
+                self.res_df.columns[0],
+                ignore_index=True,
+                inplace=True
+            )
+
             # Salva o DataFrame combinado em um arquivo JSON
             file_path, _ = QFileDialog.getSaveFileName(
                 self,
@@ -293,10 +319,9 @@ class App(QMainWindow):
             )
 
             if file_path:
-                res_df.to_json(
+                self.res_df.to_json(
                     f'{file_path}',
-                    orient='records',
-                    lines=True
+                    orient='records'
                 )
 
                 QMessageBox.information(
